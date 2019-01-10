@@ -29,7 +29,7 @@ def required(fname):
 
 setup(
     name="anki-overdrive",
-    version="0.0.1",
+    version="0.1.0",
     packages=find_packages(
         exclude=[
             "*.tests",
