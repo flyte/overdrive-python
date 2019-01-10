@@ -18,18 +18,9 @@ except ImportError:
     from setuptools import setup, find_packages
     from setuptools.command.build_py import build_py
 
-
-def required(fname):
-    return open(
-        os.path.join(
-            os.path.dirname(__file__), fname
-        )
-    ).read().split('\n')
-
-
 setup(
     name="anki-overdrive",
-    version="0.1.0",
+    version="0.1.1",
     packages=find_packages(
         exclude=[
             "*.tests",
@@ -49,7 +40,7 @@ setup(
     scripts=[],
     entry_points={},
     include_package_data=True,
-    install_requires=required('requirements.txt'),
+    install_requires=['bluepy'],
     zip_safe=False,
     # Metadata for upload to PyPI
     author='Ellis Percival',
