@@ -75,7 +75,7 @@ class Overdrive:
 
     def changeSpeed(self, speed, accel):
         """Change speed for Overdrive.
-        
+
         Parameters:
         speed -- Desired speed. (from 0 - 1000)
         accel -- Desired acceleration. (from 0 - 1000)
@@ -136,7 +136,7 @@ class Overdrive:
             if self.getNotificationsReceived() > 0:
                 break
             logging.getLogger("anki.overdrive").error("Set notify failed")
-    
+
     def ping(self):
         """Ping command."""
         self.sendCommand(b"\x16")
@@ -178,7 +178,7 @@ class Overdrive:
 
     def sendCommand(self, command):
         """Send raw command to Overdrive
-        
+
         Parameters:
         command -- Raw bytes command, without length.
         """
@@ -195,18 +195,33 @@ class Overdrive:
         """
         self._locationChangeCallbackFunc = func
 
-    def _locationChangeCallback(self, location, piece, speed, clockwise):
+    def locationChangeHandler(self, data):
         """Location change callback wrapper.
 
-        Parameters:
+        Positional args:
         addr -- MAC address of car
-        location -- Received location ID on piece.
-        piece -- Received piece ID.
-        speed -- Measured speed.
-        clockwise -- Clockwise flag.
+        params -- Dict containing parameters below
+
+        Parameters:
+        location -- Received location ID on piece (int)
+        piece -- Received piece ID (int)
+        offset -- Offset from road center in mm (float)
+        speed -- Measured speed (int)
+        clockwise -- Clockwise flag
         """
+        location, piece, offset, speed, clockwiseVal = struct.unpack_from("<BBfHB", data, 2)
+        clockwise = False
+        if clockwiseVal == 0x47:
+            clockwise = True
+        params = dict(
+            location=location,
+            piece=piece,
+            offset=offset,
+            speed=speed,
+            clockwise=clockwise
+        )
         if self._locationChangeCallbackFunc is not None:
-            self._locationChangeCallbackFunc(self.addr, location, piece, speed, clockwise)
+            self._locationChangeCallbackFunc(self.addr, params)
 
     def setPongCallback(self, func):
         """Set pong callback.
@@ -216,15 +231,15 @@ class Overdrive:
         """
         self._pongCallbackFunc = func
 
-    def _pongCallback(self):
-        """Pong callback wrapper.
-        
-        Parameters:
+    def pongHandler(self, data):
+        """Pong callback handler.
+
+        Positional args:
         addr -- MAC address of car
         """
         if self._pongCallbackFunc is not None:
             self._pongCallbackFunc(self.addr)
-    
+
     def setTransitionCallback(self, func):
         """Set piece transition callback.
 
@@ -233,14 +248,36 @@ class Overdrive:
         """
         self._transitionCallbackFunc = func
 
-    def _transitionCallback(self):
+    def transitionHandler(self, data):
         """Piece transition callback wrapper.
-        
-        Parameters:
+
+        Positional args:
         addr -- MAC address of car
+        params -- Dict containing parameters below
+
+        Parameters:
+        piece -- New track piece ID (int)
+        piecePrev -- Old track piece ID (int)
+        offset -- Offset from road centre in mm (float)
+        lastRxLane -- Last received lane change ID
+        lastLane -- Last executed lane change ID
+        lastLaneSpeed -- Last desired lange change speed mm/sec (int)
+        avgLineDrift -- Average follow line drift pixels (int)
+        changedLanes -- Have changed lanes (int)
+        uphillCnt -- Uphill counter (int)
+        downhillCnt -- Downhill counter (int)
+        leftWheelDist -- Left wheel displacement since last transition (int)
+        rightWheelDist -- Right wheel displacement since last transition (int)
         """
+        args = struct.unpack_from("<bbfBBHbBBBBB", data, 2)
+        keys = ("piece piecePrev offset lastRxLane lastLane lastLaneSpeed "
+                "avgLineDrift changedLanes uphillCnt downhillCnt leftWheelDist "
+                "rightWheelDist").split()
+        params = {}
+        for i, key in enumerate(keys):
+            params[key] = args[i]
         if self._transitionCallbackFunc is not None:
-            self._transitionCallbackFunc(self.addr)
+            self._transitionCallbackFunc(self.addr, params)
 
 
 class OverdriveDelegate(btle.DefaultDelegate):
@@ -253,23 +290,29 @@ class OverdriveDelegate(btle.DefaultDelegate):
         btle.DefaultDelegate.__init__(self)
 
     def handleNotification(self, handle, data):
-        if self.handle == handle:
-            self.notificationsRecvd += 1
-            (commandId,) = struct.unpack_from("B", data, 1)
-            if commandId == 0x27:
-                # Location position
-                location, piece, offset, speed, clockwiseVal = struct.unpack_from("<BBfHB", data, 2)
-                clockwise = False
-                if clockwiseVal == 0x47:
-                    clockwise = True
-                threading.Thread(target=self.overdrive._locationChangeCallback, args=(location, piece, speed, clockwise)).start()
-            if commandId == 0x29:
-                # Transition notification
-                piece, piecePrev, offset, direction = struct.unpack_from("<BBfB", data, 2)
-                threading.Thread(target=self.overdrive._transitionCallback).start()
-            elif commandId == 0x17:
-                # Pong
-                threading.Thread(target=self.overdrive._pongCallback).start()
+        if self.handle != handle:
+            return
+        self.notificationsRecvd += 1
+        (commandId,) = struct.unpack_from("B", data, 1)
+        handlers = {
+            0x17: self.overdrive.pongHandler,
+            0x27: self.overdrive.locationChangeHandler,
+            0x29: self.overdrive.transitionHandler
+        }
+        try:
+            handler = handlers[commandId]
+        except KeyError:
+            # Unhandled command received
+            log = logging.getLogger("anki.overdrive")
+            log.warning(
+                "Unhandled command ID received: %s", hex(commandId)
+            )
+            log.warning(
+                "Data for unhandled cmd ID %s: 0x%s", hex(commandId), data.hex()
+            )
+            return
+
+        threading.Thread(target=handler, args=(data,)).start()
 
     def setHandle(self, handle):
         self.handle = handle
