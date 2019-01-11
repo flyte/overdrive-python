@@ -37,6 +37,7 @@ setup(
             "examples"
         ]
     ),
+    py_modules=['overdrive'],
     scripts=[],
     entry_points={},
     include_package_data=True,
